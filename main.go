@@ -1,10 +1,12 @@
 package main
 
 import (
-	"bufio"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
+	"io/fs"
+	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -32,33 +34,128 @@ type VideoFileInfoProbe struct {
 }
 
 func main() {
-	var filePath string
+	fileFlag := flag.String("f", "", "a string")
+	directoryFlag := flag.String("d", "", "a string")
+	recursiveFlag := flag.Bool("r", false, "a bool")
 
-	fmt.Println("Please insert path to video file:")
-	scanner := bufio.NewScanner(os.Stdin)
-	if scanner.Scan() {
-		filePath = scanner.Text()
+	flag.Parse()
+
+	filePath := *fileFlag
+	directoryPath := *directoryFlag
+	isRecursive := *recursiveFlag
+
+	// Check that one flag is being used.
+	if len(filePath) == 0 && len(directoryPath) == 0 {
+		panic("Please use one flag. Either -f for a single file conversion or -d for a directory to convert files in batch.")
+	}
+	if len(filePath) > 0 && len(directoryPath) > 0 {
+		panic("Cannot use -f and -d flags at the same time.")
 	}
 
-	originalFile := fmt.Sprintf("%v.original", filePath)
+	// Convert single file.
+	if len(filePath) > 0 {
+		fmt.Println("Obtainig file information")
+		data, err := ffmpeg.Probe(filePath)
+		if err != nil {
+			panic(err)
+		}
 
-	err := os.Rename(filePath, originalFile)
-	if err != nil {
-		panic(err)
-	}
-	data, err := ffmpeg.Probe(originalFile)
-	if err != nil {
-		panic(err)
-	}
-
-	err = convert(data, originalFile, filePath)
-	if err != nil {
-		fmt.Println(err)
+		err = convert(data, filePath)
+		if err != nil {
+			fmt.Println(err)
+		}
 	}
 
+	if len(directoryPath) > 0 && !isRecursive {
+		fmt.Println("Scanning files inside directory.")
+
+		// Convert all video files in the directory path.
+		files, err := fileMatchDir(directoryPath)
+		if err != nil {
+			panic(err)
+		}
+
+		for _, filePath := range files {
+			data, err := ffmpeg.Probe(filePath)
+			if err != nil {
+				panic(err)
+			}
+
+			err = convert(data, filePath)
+			if err != nil {
+				fmt.Println(err)
+			}
+		}
+	}
+
+	if len(directoryPath) > 0 && isRecursive {
+		fmt.Println("Scanning directory and subdirectories for video files.")
+
+		// Convert video files inside directory recursively.
+		files, err := walkMatch(directoryPath)
+		if err != nil {
+			panic(err)
+		}
+
+		for _, filePath := range files {
+			data, err := ffmpeg.Probe(filePath)
+			if err != nil {
+				panic(err)
+			}
+
+			err = convert(data, filePath)
+			if err != nil {
+				fmt.Println(err)
+			}
+		}
+
+	}
 }
 
-func convert(fileData string, originalFile string, filePath string) error {
+func fileMatchDir(root string) ([]string, error) {
+	var matches []string
+
+	files, err := ioutil.ReadDir(root)
+	if err != nil {
+		panic(err)
+	}
+
+	for _, file := range files {
+		if !file.IsDir() {
+			switch filepath.Ext(file.Name()) {
+			case ".mp4", ".mkv", ".mov":
+				matches = append(matches, file.Name())
+			}
+		}
+	}
+
+	return matches, nil
+}
+
+func walkMatch(root string) ([]string, error) {
+	var matches []string
+
+	err := filepath.WalkDir(root, func(path string, info fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		switch filepath.Ext(path) {
+		case ".mp4", ".mkv", ".mov":
+			matches = append(matches, path)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return matches, nil
+}
+
+func convert(fileData string, filePath string) error {
 
 	var (
 		totalAudioStreams       int
@@ -76,8 +173,8 @@ func convert(fileData string, originalFile string, filePath string) error {
 
 	for _, s := range vFileInfo.Streams {
 
-		// Check that file codec is h264. h265 transcoding to h264 not supported.
-		if s.CodecType == "video" && s.CodecName != "h264" {
+		// Check that file codec is not h265. h265 transcoding to h264 is not supported yet :).
+		if s.CodecType == "video" && s.CodecName == "h265" || s.CodecName == "hevc" {
 			err := fmt.Sprintf("%v encoding is not supported\n", s.CodecName)
 			return errors.New(err)
 		}
@@ -94,8 +191,11 @@ func convert(fileData string, originalFile string, filePath string) error {
 			// if s.Tags.HandlerName == "Hearing Impaired" {
 			// 	customNamingTag = ".hi"
 			// }
+			switch s.Tags.Language {
+			case "eng", "en", "spa", "es":
+				extractSubs(s.Tags.Language, filePath, subStreamIndex, customNamingTag, filePath)
+			}
 
-			extractSubs(s.Tags.Language, originalFile, subStreamIndex, customNamingTag, filePath)
 			subStreamIndex++
 		}
 
@@ -127,12 +227,36 @@ func convert(fileData string, originalFile string, filePath string) error {
 
 	// Run needed ffmpeg commands
 	if process == "disposition" {
+		// Rename file to .original
+		originalFile := fmt.Sprintf("%v.original", filePath)
+
+		err = os.Rename(filePath, originalFile)
+		if err != nil {
+			panic(err)
+		}
+
 		changeDefaultAudioStream(totalAudioStreams, audioStreamIndex, audioDefaultStreamIndex, originalFile, filePath)
 	}
 	if process == "channelToStereo" {
+		// Rename file to .original
+		originalFile := fmt.Sprintf("%v.original", filePath)
+
+		err = os.Rename(filePath, originalFile)
+		if err != nil {
+			panic(err)
+		}
+
 		createStereoAudioStream(totalAudioStreams, audioStreamIndex, audioBitrate, originalFile, filePath)
 	}
 	if process == "encode" {
+		// Rename file to .original
+		originalFile := fmt.Sprintf("%v.original", filePath)
+
+		err = os.Rename(filePath, originalFile)
+		if err != nil {
+			panic(err)
+		}
+
 		encodeAudioStream(totalAudioStreams, audioStreamIndex, originalFile, filePath)
 	}
 
@@ -140,20 +264,23 @@ func convert(fileData string, originalFile string, filePath string) error {
 }
 
 func extractSubs(language string, originalFile string, subStreamIndex int, customNamingTag string, filePath string) error {
+
 	fileName := filepath.Base(filePath)
 	fileDir := filepath.Dir(filePath)
 
-	input := ffmpeg.Input(originalFile)
+	input := ffmpeg.Input(originalFile, ffmpeg.KwArgs{"sub_charenc": "Latin1"})
 
 	subtitleIndex := fmt.Sprintf("s:%v", subStreamIndex)
 	subtitle := input.Get(subtitleIndex)
 
-	subtitleFileName := fmt.Sprintf("%v.%v%v.srt", strings.TrimSuffix(fileName, filepath.Ext(fileName)), language, customNamingTag)
+	// Convert subtitles to vtt
+	subtitleFileName := fmt.Sprintf("%v.%v%v.vtt", strings.TrimSuffix(fileName, filepath.Ext(fileName)), language, customNamingTag)
 	fmt.Printf("Extracting Subtitle: %v", subtitleFileName)
 
 	outputFileDir := fmt.Sprintf("%v/%v", fileDir, subtitleFileName)
 
-	out := ffmpeg.Output([]*ffmpeg.Stream{subtitle}, outputFileDir).OverWriteOutput()
+	codecSubtitleStream := fmt.Sprintf("c:s:%v", subStreamIndex)
+	out := ffmpeg.Output([]*ffmpeg.Stream{subtitle}, outputFileDir, ffmpeg.KwArgs{codecSubtitleStream: "webvtt"}).OverWriteOutput()
 
 	out.Run()
 	return nil
@@ -181,9 +308,10 @@ func changeDefaultAudioStream(totalAudioStreams, audioStreamIndex, audioDefaultS
 	newDefaultAudioStream := fmt.Sprintf("disposition:a:%v", audioStreamIndex)
 	oldDefaultAudioStream := fmt.Sprintf("disposition:a:%v", audioDefaultStreamIndex)
 
-	out := ffmpeg.Output(streams, fileOutput, ffmpeg.KwArgs{"c": "copy", newDefaultAudioStream: "default", oldDefaultAudioStream: 0, "movflags": "+faststart"}).OverWriteOutput()
+	out := ffmpeg.Output(streams, fileOutput, ffmpeg.KwArgs{"c": "copy", newDefaultAudioStream: "default", oldDefaultAudioStream: 0, "movflags": "faststart"}).OverWriteOutput()
 	out.Run()
 
+	os.Remove(originalFile)
 	return nil
 }
 
@@ -220,14 +348,16 @@ func createStereoAudioStream(totalAudioStreams, audioStreamIndex int, audioBitra
 		panic(err)
 	}
 
-	out := ffmpeg.Output(streams, fileOutput, ffmpeg.KwArgs{"c:v": "copy", "ac": 2, "b:a:0": audioBitrateInt, addedAudioStream: "copy", "disposition:a": 0, "disposition:a:0": "default", "movflags": "+faststart"}).OverWriteOutput()
+	out := ffmpeg.Output(streams, fileOutput, ffmpeg.KwArgs{"c:v": "copy", "ac": 2, "b:a:0": audioBitrateInt, addedAudioStream: "copy", "disposition:a": 0, "disposition:a:0": "default", "movflags": "faststart"}).OverWriteOutput()
 	out.Run()
+
+	os.Remove(originalFile)
 
 	return nil
 }
 
 func encodeAudioStream(totalAudioStreams, audioStreamIndex int, originalFile, filePath string) error {
-	fmt.Println("Encoding AAC 2.0 audio stream.")
+	fmt.Println("Converting and creating new AAC 2.0 audio stream.")
 
 	fileName := filepath.Base(filePath)
 	fileDir := filepath.Dir(filePath)
@@ -252,8 +382,10 @@ func encodeAudioStream(totalAudioStreams, audioStreamIndex int, originalFile, fi
 
 	addedAudioStream := fmt.Sprintf("c:a:%v", totalAudioStreams)
 
-	out := ffmpeg.Output(streams, fileOutput, ffmpeg.KwArgs{"c:v": "copy", "c:a:0": "aac", "ac": 2, addedAudioStream: "copy", "disposition:a": 0, "disposition:a:0": "default", "movflags": "+faststart"}).OverWriteOutput().ErrorToStdOut()
+	out := ffmpeg.Output(streams, fileOutput, ffmpeg.KwArgs{"c:v": "copy", "c:a:0": "aac", "ac": 2, addedAudioStream: "copy", "disposition:a": 0, "disposition:a:0": "default", "movflags": "faststart"}).OverWriteOutput()
 	out.Run()
+
+	os.Remove(originalFile)
 
 	return nil
 }
