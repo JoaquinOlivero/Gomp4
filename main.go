@@ -9,7 +9,6 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	ffmpeg "github.com/u2takey/ffmpeg-go"
@@ -162,7 +161,6 @@ func convert(fileData string, filePath string) error {
 		audioStreamIndex        int
 		audioDefaultStreamIndex int
 		process                 string
-		audioBitrate            string
 	)
 
 	var vFileInfo VideoFileInfoProbe
@@ -214,7 +212,6 @@ func convert(fileData string, filePath string) error {
 
 		if s.CodecType == "audio" && s.CodecName == "aac" && s.Channels != 2 && process == "" {
 			process = "channelToStereo"
-			audioBitrate = s.Bitrate
 			audioStreamIndex = totalAudioStreams - 1
 		}
 
@@ -246,7 +243,7 @@ func convert(fileData string, filePath string) error {
 			panic(err)
 		}
 
-		createStereoAudioStream(totalAudioStreams, audioStreamIndex, audioBitrate, originalFile, filePath)
+		createStereoAudioStream(totalAudioStreams, audioStreamIndex, originalFile, filePath)
 	}
 	if process == "encode" {
 		// Rename file to .original
@@ -315,7 +312,7 @@ func changeDefaultAudioStream(totalAudioStreams, audioStreamIndex, audioDefaultS
 	return nil
 }
 
-func createStereoAudioStream(totalAudioStreams, audioStreamIndex int, audioBitrate, originalFile, filePath string) error {
+func createStereoAudioStream(totalAudioStreams, audioStreamIndex int, originalFile, filePath string) error {
 	fmt.Println("Creating AAC 2.0 audio stream.")
 
 	fileName := filepath.Base(filePath)
@@ -341,14 +338,7 @@ func createStereoAudioStream(totalAudioStreams, audioStreamIndex int, audioBitra
 
 	addedAudioStream := fmt.Sprintf("c:a:%v", totalAudioStreams)
 
-	// audio bitrate string to int
-	audioBitrateInt, err := strconv.Atoi(audioBitrate)
-	if err != nil {
-		// ... handle error
-		panic(err)
-	}
-
-	out := ffmpeg.Output(streams, fileOutput, ffmpeg.KwArgs{"c:v": "copy", "ac": 2, "b:a:0": audioBitrateInt, addedAudioStream: "copy", "disposition:a": 0, "disposition:a:0": "default", "movflags": "faststart"}).OverWriteOutput()
+	out := ffmpeg.Output(streams, fileOutput, ffmpeg.KwArgs{"c:v": "copy", "ac": 2, addedAudioStream: "copy", "disposition:a": 0, "disposition:a:0": "default", "movflags": "faststart"}).OverWriteOutput()
 	out.Run()
 
 	os.Remove(originalFile)
