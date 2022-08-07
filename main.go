@@ -26,8 +26,8 @@ type VideoFileInfoProbe struct {
 			Default int `json:"default"`
 		} `json:"disposition"`
 		Tags struct {
-			Language string `json:"language"`
-			// HandlerName string `json:"handler_name"`
+			Language    string `json:"language"`
+			HandlerName string `json:"handler_name"`
 		} `json:"tags"`
 	} `json:"streams"`
 }
@@ -74,7 +74,8 @@ func main() {
 			panic(err)
 		}
 
-		for _, filePath := range files {
+		for _, file := range files {
+			filePath := fmt.Sprintf("%v/%v", directoryPath, file)
 			data, err := ffmpeg.Probe(filePath)
 			if err != nil {
 				panic(err)
@@ -186,9 +187,9 @@ func convert(fileData string, filePath string) error {
 		subStreamIndex := 0
 		if s.CodecType == "subtitle" {
 			customNamingTag := ""
-			// if s.Tags.HandlerName == "Hearing Impaired" {
-			// 	customNamingTag = ".hi"
-			// }
+			if s.Tags.HandlerName == "Hearing Impaired" {
+				customNamingTag = ".forced"
+			}
 			switch s.Tags.Language {
 			case "eng", "en", "spa", "es":
 				extractSubs(s.Tags.Language, filePath, subStreamIndex, customNamingTag, filePath)
@@ -265,12 +266,16 @@ func extractSubs(language string, originalFile string, subStreamIndex int, custo
 	fileName := filepath.Base(filePath)
 	fileDir := filepath.Dir(filePath)
 
-	input := ffmpeg.Input(originalFile, ffmpeg.KwArgs{"sub_charenc": "Latin1"})
+	input := ffmpeg.Input(originalFile, ffmpeg.KwArgs{"sub_charenc": "UTF-8"})
 
 	subtitleIndex := fmt.Sprintf("s:%v", subStreamIndex)
 	subtitle := input.Get(subtitleIndex)
 
 	// Convert subtitles to vtt
+	if language == "spa" {
+		language = "es"
+	}
+
 	subtitleFileName := fmt.Sprintf("%v.%v%v.vtt", strings.TrimSuffix(fileName, filepath.Ext(fileName)), language, customNamingTag)
 	fmt.Printf("Extracting Subtitle: %v", subtitleFileName)
 
