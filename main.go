@@ -170,6 +170,7 @@ func convert(fileData string, filePath string) error {
 		panic(err)
 	}
 
+	subStreamIndex := 0
 	for _, s := range vFileInfo.Streams {
 
 		// Check that file codec is not h265. h265 transcoding to h264 is not supported yet :).
@@ -184,7 +185,6 @@ func convert(fileData string, filePath string) error {
 		}
 
 		// Extract subs
-		subStreamIndex := 0
 		if s.CodecType == "subtitle" {
 			customNamingTag := ""
 			if s.Tags.HandlerName == "Hearing Impaired" {
@@ -277,9 +277,17 @@ func extractSubs(language string, originalFile string, subStreamIndex int, custo
 	}
 
 	subtitleFileName := fmt.Sprintf("%v.%v%v.vtt", strings.TrimSuffix(fileName, filepath.Ext(fileName)), language, customNamingTag)
-	fmt.Printf("Extracting Subtitle: %v", subtitleFileName)
+	fmt.Printf("Extracting Subtitle: %v\n", subtitleFileName)
 
 	outputFileDir := fmt.Sprintf("%v/%v", fileDir, subtitleFileName)
+
+	// if file already exists create a new one
+	_, err := os.Stat(outputFileDir)
+	// No error means the file already exists.
+	if err == nil {
+		subtitleFileName = fmt.Sprintf("%v.%v%v.1.vtt", strings.TrimSuffix(fileName, filepath.Ext(fileName)), language, customNamingTag)
+		outputFileDir = fmt.Sprintf("%v/%v", fileDir, subtitleFileName)
+	}
 
 	codecSubtitleStream := fmt.Sprintf("c:s:%v", subStreamIndex)
 	out := ffmpeg.Output([]*ffmpeg.Stream{subtitle}, outputFileDir, ffmpeg.KwArgs{codecSubtitleStream: "webvtt"}).OverWriteOutput()
@@ -380,7 +388,7 @@ func encodeAudioStream(totalAudioStreams, audioStreamIndex int, originalFile, fi
 	out := ffmpeg.Output(streams, fileOutput, ffmpeg.KwArgs{"c:v": "copy", "c:a:0": "aac", "ac": 2, addedAudioStream: "copy", "disposition:a": 0, "disposition:a:0": "default", "movflags": "faststart"}).OverWriteOutput()
 	out.Run()
 
-	os.Remove(originalFile)
+	// os.Remove(originalFile)
 
 	return nil
 }
