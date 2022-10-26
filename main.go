@@ -388,7 +388,7 @@ func encodeAudioStream(totalAudioStreams, audioStreamIndex int, originalFile, fi
 	out := ffmpeg.Output(streams, fileOutput, ffmpeg.KwArgs{"c:v": "copy", "c:a:0": "aac", "ac": 2, addedAudioStream: "copy", "disposition:a": 0, "disposition:a:0": "default", "movflags": "faststart"}).OverWriteOutput()
 	out.Run()
 
-	// os.Remove(originalFile)
+	os.Remove(originalFile)
 
 	return nil
 }
